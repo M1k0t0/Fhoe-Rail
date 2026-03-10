@@ -1,11 +1,24 @@
+import ctypes
 import time
 
 import cv2
 import numpy as np
-from PIL import ImageGrab
+from PIL import Image, ImageGrab
+import win32con
+import win32gui
+import win32ui
 
 from utils.log import log
 from utils.window import Window
+
+# DPI awareness context for accurate screen coordinates on scaled displays
+_DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)
+try:
+    ctypes.windll.user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+    ctypes.windll.user32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    _HAS_THREAD_DPI_API = True
+except (OSError, AttributeError):
+    _HAS_THREAD_DPI_API = False
 
 
 class Img:
@@ -125,43 +138,215 @@ class Img:
         说明：
             获取游戏窗口的屏幕截图
         参数：
-            :param window: 窗口对象
             :param offset: 左、上、右、下，正值为向右或向下偏移
             :param max_retries: 最大重试次数
             :param retry_interval: 重试间隔（秒）
         """
-        if self.window.check_window_visibility():
-            screenshot_left, screenshot_top, screenshot_right, screenshot_bottom = self.cal_screenshot()
+        # 设置线程级 DPI 感知，确保坐标使用物理像素
+        old_dpi_context = None
+        if _HAS_THREAD_DPI_API:
+            try:
+                old_dpi_context = ctypes.windll.user32.SetThreadDpiAwarenessContext(
+                    _DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+            except (OSError, AttributeError):
+                pass
 
-            # 计算偏移截图范围
-            new_left = screenshot_left + offset[0]
-            new_top = screenshot_top + offset[1]
-            new_right = screenshot_right + offset[2]
-            new_bottom = screenshot_bottom + offset[3]
-            # 偏移有效则使用偏移值
-            if all([new_left < new_right, new_top < new_bottom]):
-                screenshot_left, screenshot_top, screenshot_right, screenshot_bottom = new_left, new_top, new_right, new_bottom
-            else:
-                log.info(
-                    f'截图区域无效，偏移值错误({offset[0]},{offset[1]},{offset[2]},{offset[3]})，将使用窗口截图')
-
-            retries = 0
-            while retries <= max_retries:
+        try:
+            return self._take_screenshot_impl(offset, max_retries, retry_interval)
+        finally:
+            if old_dpi_context is not None:
                 try:
-                    picture = ImageGrab.grab(
-                        (screenshot_left, screenshot_top, screenshot_right, screenshot_bottom), all_screens=True)
+                    ctypes.windll.user32.SetThreadDpiAwarenessContext(
+                        ctypes.c_void_p(old_dpi_context))
+                except (OSError, AttributeError):
+                    pass
+
+    def _capture_printwindow(self):
+        """
+        使用 PrintWindow API 截取窗口客户区内容。
+        可以捕获硬件加速渲染的内容（如云游戏、DirectX 窗口）。
+        返回：(PIL.Image, client_screen_x, client_screen_y) 或 None
+        """
+        hwnd = self.window.hwnd
+        if not hwnd:
+            return None
+
+        try:
+            # 获取客户区大小和屏幕位置
+            left_c, top_c, right_c, bottom_c = win32gui.GetClientRect(hwnd)
+            client_width = right_c - left_c
+            client_height = bottom_c - top_c
+            if client_width <= 0 or client_height <= 0:
+                return None
+
+            pt = win32gui.ClientToScreen(hwnd, (0, 0))
+            client_screen_x, client_screen_y = pt
+
+            # 创建设备上下文和位图
+            hwndDC = win32gui.GetWindowDC(hwnd)
+            mfcDC = win32ui.CreateDCFromHandle(hwndDC)
+            saveDC = mfcDC.CreateCompatibleDC()
+            saveBitMap = win32ui.CreateBitmap()
+            saveBitMap.CreateCompatibleBitmap(mfcDC, client_width, client_height)
+            saveDC.SelectObject(saveBitMap)
+
+            # PrintWindow flag 3 = PW_RENDERFULLCONTENT(2) | PW_CLIENTONLY(1)
+            # PW_CLIENTONLY: 只捕获客户区（不含标题栏和边框）
+            # PW_RENDERFULLCONTENT: 强制完整渲染（支持硬件加速内容）
+            result = ctypes.windll.user32.PrintWindow(hwnd, saveDC.GetSafeHdc(), 3)
+
+            if result != 1:
+                # 清理资源
+                win32gui.DeleteObject(saveBitMap.GetHandle())
+                saveDC.DeleteDC()
+                mfcDC.DeleteDC()
+                win32gui.ReleaseDC(hwnd, hwndDC)
+                return None
+
+            # 转换为 PIL Image
+            bmpinfo = saveBitMap.GetInfo()
+            bmpstr = saveBitMap.GetBitmapBits(True)
+            img = Image.frombuffer(
+                'RGB',
+                (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
+                bmpstr, 'raw', 'BGRX', 0, 1
+            )
+
+            # 清理资源
+            win32gui.DeleteObject(saveBitMap.GetHandle())
+            saveDC.DeleteDC()
+            mfcDC.DeleteDC()
+            win32gui.ReleaseDC(hwnd, hwndDC)
+
+            return img, client_screen_x, client_screen_y
+
+        except Exception as e:
+            log.warning(f"PrintWindow 截图失败: {e}")
+            return None
+
+    def _take_screenshot_impl(self, offset, max_retries, retry_interval):
+        """take_screenshot 的实际实现（在正确的 DPI 上下文中调用）"""
+        if not self.window.check_window_visibility():
+            raise RuntimeError("窗口不可见")
+
+        retries = 0
+        while retries <= max_retries:
+            try:
+                # 优先使用 PrintWindow（支持硬件加速渲染的窗口）
+                pw_result = self._capture_printwindow()
+                if pw_result is not None:
+                    picture, client_x, client_y = pw_result
+                    client_width, client_height = picture.size
+
+                    # 计算游戏内容在客户区内的边框偏移
+                    border_x = (client_width - 1920) // 2
+                    border_top = client_height - 1080 - border_x
+
+                    # 游戏内容区域（客户区内坐标）
+                    game_left = max(0, border_x)
+                    game_top = max(0, border_top)
+                    game_right = min(client_width, client_width - border_x)
+                    game_bottom = min(client_height, client_height - border_x)
+
+                    # 应用用户指定的偏移
+                    crop_left = game_left + offset[0]
+                    crop_top = game_top + offset[1]
+                    crop_right = game_right + offset[2]
+                    crop_bottom = game_bottom + offset[3]
+
+                    # 确保裁剪区域有效
+                    crop_left = max(0, crop_left)
+                    crop_top = max(0, crop_top)
+                    crop_right = min(client_width, crop_right)
+                    crop_bottom = min(client_height, crop_bottom)
+
+                    if crop_left >= crop_right or crop_top >= crop_bottom:
+                        log.info(f'截图区域无效，偏移值错误({offset[0]},{offset[1]},{offset[2]},{offset[3]})，将使用完整客户区')
+                        crop_left, crop_top = game_left, game_top
+                        crop_right, crop_bottom = game_right, game_bottom
+
+                    cropped = picture.crop((crop_left, crop_top, crop_right, crop_bottom))
                     # 保存截图到本地，测试用
-                    # picture.save("test.png")
-                    screenshot = np.array(picture)
-                    screenshot = cv2.cvtColor(screenshot, cv2.COLOR_BGR2RGB)
-                    self.temp_screenshot = (
-                        screenshot, screenshot_left, screenshot_top, screenshot_right, screenshot_bottom)
-                    return screenshot, screenshot_left, screenshot_top, screenshot_right, screenshot_bottom
-                except Exception as e:
-                    log.info(f"截图失败，原因: {str(e)}，等待 {retry_interval} 秒后重试")
-                    retries += 1
-                    time.sleep(retry_interval)
-            raise RuntimeError(f"截图尝试失败，已达到最大重试次数 {max_retries} 次）")
+                    cropped.save("test.png")
+                    screenshot = np.array(cropped)
+                    screenshot = cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR)
+
+                    # 转换为屏幕坐标（用于鼠标点击定位）
+                    screen_left = client_x + crop_left
+                    screen_top = client_y + crop_top
+                    screen_right = client_x + crop_right
+                    screen_bottom = client_y + crop_bottom
+
+                    self.temp_screenshot = (screenshot, screen_left, screen_top, screen_right, screen_bottom)
+                    return screenshot, screen_left, screen_top, screen_right, screen_bottom
+
+                # PrintWindow 失败时回退到 ImageGrab
+                log.info("PrintWindow 不可用，回退到 ImageGrab")
+                return self._take_screenshot_imagegrab(offset)
+
+            except Exception as e:
+                log.info(f"截图失败，原因: {str(e)}，等待 {retry_interval} 秒后重试")
+                retries += 1
+                time.sleep(retry_interval)
+
+        raise RuntimeError(f"截图尝试失败，已达到最大重试次数 {max_retries} 次）")
+
+    def _take_screenshot_imagegrab(self, offset):
+        """使用 ImageGrab 截图（回退方案），基于客户区坐标"""
+        hwnd = self.window.hwnd
+        if not hwnd:
+            raise RuntimeError("窗口句柄无效")
+
+        # 直接使用客户区坐标，避免 _get_fullscreen_rect 返回显示器坐标导致的偏差
+        left_c, top_c, right_c, bottom_c = win32gui.GetClientRect(hwnd)
+        client_width = right_c - left_c
+        client_height = bottom_c - top_c
+        pt = win32gui.ClientToScreen(hwnd, (0, 0))
+        client_screen_x, client_screen_y = pt
+
+        # 截取整个客户区
+        grab_left = client_screen_x
+        grab_top = client_screen_y
+        grab_right = client_screen_x + client_width
+        grab_bottom = client_screen_y + client_height
+
+        picture = ImageGrab.grab(
+            (grab_left, grab_top, grab_right, grab_bottom), all_screens=True)
+
+        # 缩放到 1920x1080 以匹配模板图片（处理客户区尺寸不完全为1920x1080的情况）
+        if picture.size != (1920, 1080):
+            log.info(f"客户区大小 {picture.size}，缩放到 1920x1080")
+            picture = picture.resize((1920, 1080), Image.LANCZOS)
+
+        # 应用偏移裁剪
+        # 基准是 1920x1080 的图像
+        crop_left = max(0, offset[0])
+        crop_top = max(0, offset[1])
+        crop_right = min(1920, 1920 + offset[2])
+        crop_bottom = min(1080, 1080 + offset[3])
+
+        if crop_left >= crop_right or crop_top >= crop_bottom:
+            log.info(f'截图区域无效，偏移值错误({offset[0]},{offset[1]},{offset[2]},{offset[3]})，将使用完整截图')
+            crop_left, crop_top, crop_right, crop_bottom = 0, 0, 1920, 1080
+
+        if (crop_left, crop_top, crop_right, crop_bottom) != (0, 0, 1920, 1080):
+            picture = picture.crop((crop_left, crop_top, crop_right, crop_bottom))
+
+        picture.save("test.png")
+        screenshot = np.array(picture)
+        screenshot = cv2.cvtColor(screenshot, cv2.COLOR_BGR2RGB)
+
+        # 计算屏幕坐标（用于鼠标点击定位）
+        # 从 1920x1080 坐标映射回实际屏幕坐标
+        scale_x = client_width / 1920
+        scale_y = client_height / 1080
+        screen_left = int(client_screen_x + crop_left * scale_x)
+        screen_top = int(client_screen_y + crop_top * scale_y)
+        screen_right = int(client_screen_x + crop_right * scale_x)
+        screen_bottom = int(client_screen_y + crop_bottom * scale_y)
+
+        self.temp_screenshot = (screenshot, screen_left, screen_top, screen_right, screen_bottom)
+        return screenshot, screen_left, screen_top, screen_right, screen_bottom
 
     def scan_screenshot(self, prepared, offset=(0, 0, 0, 0)) -> dict:
         """

@@ -2,6 +2,8 @@ import time
 
 import cv2 as cv
 import pyautogui
+import win32api
+import win32con
 
 from utils.blackscreen import BlackScreen
 from utils.config.config import ConfigurationManager
@@ -12,6 +14,54 @@ from utils.monthly_pass import MonthlyPass
 from utils.mouse_event import MouseEvent
 from utils.config.map_move import MAP_MOVE_NAV_DATA
 from utils.log import log
+
+
+def _press_key(key_name: str, hold_time: float = 0.05):
+    """
+    使用 win32api.keybd_event 发送按键，包含正确的扫描码和按下/释放延迟。
+    相比 pyautogui.press()，能更可靠地将按键传递到云游戏浏览器窗口。
+    """
+    vk = _get_vk_code(key_name)
+    scan = win32api.MapVirtualKey(vk, 0)
+    win32api.keybd_event(vk, scan, 0, 0)
+    time.sleep(hold_time)
+    win32api.keybd_event(vk, scan, win32con.KEYEVENTF_KEYUP, 0)
+
+
+def _key_down(key_name: str):
+    """按下按键不释放"""
+    vk = _get_vk_code(key_name)
+    scan = win32api.MapVirtualKey(vk, 0)
+    win32api.keybd_event(vk, scan, 0, 0)
+
+
+def _key_up(key_name: str):
+    """释放按键"""
+    vk = _get_vk_code(key_name)
+    scan = win32api.MapVirtualKey(vk, 0)
+    win32api.keybd_event(vk, scan, win32con.KEYEVENTF_KEYUP, 0)
+
+
+def _get_vk_code(key_name: str) -> int:
+    """将按键名转换为 Windows 虚拟键码"""
+    special_keys = {
+        'esc': win32con.VK_ESCAPE,
+        'escape': win32con.VK_ESCAPE,
+        'enter': win32con.VK_RETURN,
+        'space': win32con.VK_SPACE,
+        'tab': win32con.VK_TAB,
+        'shift': win32con.VK_SHIFT,
+        'ctrl': win32con.VK_CONTROL,
+        'alt': win32con.VK_MENU,
+    }
+    key_lower = key_name.lower()
+    if key_lower in special_keys:
+        return special_keys[key_lower]
+    if len(key_lower) == 1 and key_lower.isalpha():
+        return ord(key_lower.upper())
+    if len(key_lower) == 1 and key_lower.isdigit():
+        return ord(key_lower)
+    raise ValueError(f"不支持的按键: {key_name}")
 
 
 class Map:
@@ -45,7 +95,7 @@ class Map:
         # 主逻辑
         while attempts < max_attempts:
             log.info(f'尝试打开地图 (尝试次数: {attempts + 1}/{max_attempts})')
-            pyautogui.press(self.open_map_btn)
+            _press_key(self.open_map_btn)
             time.sleep(0.05)
             self._wait_for_main_interface(speed_open, start_time)
             speed_open = True
@@ -162,8 +212,8 @@ class Map:
         target_list = [target, inverted_target]
         direction_names = ["向下移动", "向上移动"]
         while not self.img.have_screenshot(target_list, (0, 0, 0, 0), threshold) and time.time() - start_time < timeout and threshold >= min_threshold:
-            # 设置向下、向上的移动数值
-            directions = [(1700, 900, 1700, 300), (1700, 300, 1700, 900)]
+            # 设置向下、向上的移动数值（右侧场景列表区域）
+            directions = [(1600, 700, 1600, 350), (1600, 350, 1600, 700)]
             for index, direction in enumerate(directions):
                 log.info(
                     f"开始移动右侧场景，{direction_names[index]}，当前所需匹配值{threshold}")
@@ -291,7 +341,7 @@ class Map:
                 orientation_delay = min(orientation_delay, 4)
                 time.sleep(orientation_delay)
                 if self.blackscreen.check_blackscreen():
-                    pyautogui.press('esc')
+                    _press_key('esc')
                     time.sleep(2)
                     orientation_delay += 0.5
                 else:
@@ -364,10 +414,10 @@ class Map:
                 return
             if not speed_open:
                 log.info("按下s打断技能")
-                pyautogui.keyDown('s')
-                pyautogui.press(self.open_map_btn)
+                _key_down('s')
+                _press_key(self.open_map_btn)
                 time.sleep(0.05)
-        pyautogui.keyUp('s')
+        _key_up('s')
         return
 
     def _handle_target_recognition(self, target):

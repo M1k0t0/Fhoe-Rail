@@ -83,12 +83,40 @@ class MouseEvent(metaclass=SingletonMeta):
             mouse_drag(100, 100, 300, 300, 0.5)  # 拖拽到终点后停留0.5秒
         """
         left, top, right, bottom = self.window.get_rect()
-        pyautogui.moveTo(left + x, top + y)
-        pyautogui.mouseDown()
-        pyautogui.moveTo(left + end_x, top + end_y, duration=0.2)
+        start_x = left + x
+        start_y = top + y
+        target_x = left + end_x
+        target_y = top + end_y
+
+        # 先移到起点并点击一次，让云游戏重新定位游戏内光标到该位置
+        # Moonlight Web Point-and-Drag 模式下，点击会同步光标位置
+        win32api.SetCursorPos((start_x+2, start_y+2)) # 微调坐标，确保触发云游戏的点击事件
+        time.sleep(0.1)
+        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        time.sleep(0.1)
+        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        time.sleep(0.3)
+
+        # 再次确认光标在起点，然后按下开始拖拽
+        win32api.SetCursorPos((start_x, start_y))
+        time.sleep(0.15)
+        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        time.sleep(0.1)
+
+        # 分步拖拽，避免云游戏网页跟不上
+        steps = 8
+        for i in range(1, steps + 1):
+            frac = i / steps
+            ix = int(start_x + (target_x - start_x) * frac)
+            iy = int(start_y + (target_y - start_y) * frac)
+            win32api.SetCursorPos((ix, iy))
+            time.sleep(0.05)
+
         if press_time:
             time.sleep(press_time)
-        pyautogui.mouseUp()
+        else:
+            time.sleep(0.1)
+        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
         time.sleep(1)
 
     def mouse_press_alt(self, x, y, delay: float = 0.4):
