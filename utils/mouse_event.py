@@ -62,6 +62,7 @@ class MouseEvent(metaclass=SingletonMeta):
         time.sleep(delay)
         time.sleep(0.01)
         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        time.sleep(0.1)
 
     def mouse_drag(self, x, y, end_x, end_y, press_time: float = 0):
         """
