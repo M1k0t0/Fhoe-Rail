@@ -16,7 +16,12 @@ import win32con
 from utils.config.config import ConfigurationManager
 from utils.exceptions import CustomException
 from utils.img import Img
-from utils.keyboard_event import KeyboardEvent
+from utils.keyboard_event import (
+    KeyboardEvent,
+    press_key_cdp_or_pyautogui,
+    key_down_cdp_or_pynput,
+    key_up_cdp_or_pynput,
+)
 from utils.log import log
 from utils.mouse_event import MouseEvent
 from utils.singleton import SingletonMeta
@@ -232,7 +237,12 @@ class Handle(metaclass=SingletonMeta):
             else:
                 self.fighting()
         elif value == 2:  # 打障碍物
-            self.mouse_event.click(win32api.GetCursorPos())
+            if self.mouse_event._is_cloud:
+                # 云游戏模式下点击当前 CDP 光标位置
+                cdp = self.mouse_event.cdp
+                cdp.mouse_click(cdp.last_x, cdp.last_y)
+            else:
+                self.mouse_event.click(win32api.GetCursorPos())
             time.sleep(1)
         else:
             raise CustomException("map数据错误, fighting参数异常")
@@ -250,7 +260,7 @@ class Handle(metaclass=SingletonMeta):
         """
         使用'E'攻击，补充秘技点数
         """
-        pyautogui.press('e')
+        press_key_cdp_or_pyautogui('e')
         time.sleep(0.25)
         self.technique_points_dialog()
 
@@ -312,7 +322,7 @@ class Handle(metaclass=SingletonMeta):
                     if allow_buy:
                         log.info("补E")
                         time.sleep(0.25)
-                        pyautogui.press('e')
+                        press_key_cdp_or_pyautogui('e')
                         log.info("补E结束")
                         time.sleep(0.25)
                 else:
@@ -325,10 +335,10 @@ class Handle(metaclass=SingletonMeta):
         检测并回到主界面
         """
         while not self.img.on_main_interface(timeout=2):  # 检测是否出现左上角灯泡，即主界面检测
-            pyautogui.press('esc')
+            press_key_cdp_or_pyautogui('esc')
             time.sleep(delay)
             if self.img.on_interface(check_list=[self.img.battle_esc_check], timeout=0.0, threshold=0.97, offset=(0, 0, -1800, -970), allow_log=True):
-                pyautogui.press('esc')
+                press_key_cdp_or_pyautogui('esc')
                 time.sleep(2)
                 self.fight_elapsed()
 
@@ -337,10 +347,14 @@ class Handle(metaclass=SingletonMeta):
         按下esc键，等待3秒后抬起
         """
         if value == 1:
-            win32api.keybd_event(win32con.VK_ESCAPE, 0, 0, 0)
-            time.sleep(random.uniform(0.09, 0.15))
-            win32api.keybd_event(win32con.VK_ESCAPE, 0,
-                                 win32con.KEYEVENTF_KEYUP, 0)
+            if self.mouse_event._is_cloud:
+                from utils.keyboard_event import keybd_event_cdp_or_win32
+                keybd_event_cdp_or_win32('esc', hold_time=random.uniform(0.09, 0.15))
+            else:
+                win32api.keybd_event(win32con.VK_ESCAPE, 0, 0, 0)
+                time.sleep(random.uniform(0.09, 0.15))
+                win32api.keybd_event(win32con.VK_ESCAPE, 0,
+                                     win32con.KEYEVENTF_KEYUP, 0)
             time.sleep(3)
         else:
             raise CustomException("map数据错误, esc参数只能为1")
@@ -350,9 +364,9 @@ class Handle(metaclass=SingletonMeta):
         按下数字键，等待value秒后抬起
         """
         time.sleep(value)
-        KeyboardController().press(key)
+        key_down_cdp_or_pynput(key)
         time.sleep(0.3)
-        KeyboardController().release(key)
+        key_up_cdp_or_pynput(key)
 
     def handle_main(self, value):
         """
@@ -530,7 +544,11 @@ class Handle(metaclass=SingletonMeta):
         参数：
             :param clicks 滚动单位，正数为向上滚动
         """
-        pyautogui.scroll(clicks)
+        if self.mouse_event._is_cloud:
+            direction = 1 if clicks > 0 else -1
+            self.mouse_event.cdp.mouse_scroll(-100 * direction)
+        else:
+            pyautogui.scroll(clicks)
         time.sleep(0.5)
 
     def handle_move(self, value, key, normal_run=False, last_key: str = ""):
@@ -550,7 +568,7 @@ class Handle(metaclass=SingletonMeta):
                     self.fight_in_map = True
 
         self.run_fix_time = 0
-        KeyboardController().press(key)
+        key_down_cdp_or_pynput(key)
         
         log.info(f"上一次疾跑状态: {self.last_step_run}")
         # 疾跑相关逻辑回退2025.2.28版本
@@ -597,8 +615,8 @@ class Handle(metaclass=SingletonMeta):
                 self.last_step_run = False
         temp_time = time.perf_counter() - start_time
         self.stop_check_sprint_task()
-        KeyboardController().release(KeyboardKey.shift)
-        KeyboardController().release(key)
+        key_up_cdp_or_pynput(KeyboardKey.shift)
+        key_up_cdp_or_pynput(key)
         if allow_run:
             time.sleep(0.03)
 
@@ -621,12 +639,12 @@ class Handle(metaclass=SingletonMeta):
                 fix_start_time = time.perf_counter()
                 key_dict = {'w': 's', 's': 'w', 'a': 'd', 'd': 'a'}
                 if key in key_dict:
-                    KeyboardController().press(key_dict.get(key))
+                    key_down_cdp_or_pynput(key_dict.get(key))
                     while time.perf_counter() - fix_start_time < extra_time:
                         pass
-                    KeyboardController().release(key_dict.get(key))
-                    KeyboardController().press(key)
-                    KeyboardController().release(key)
+                    key_up_cdp_or_pynput(key_dict.get(key))
+                    key_down_cdp_or_pynput(key)
+                    key_up_cdp_or_pynput(key)
 
     # 机器配置不高时，sleep时间过短，会导致误判
     # async def async_cancel_sprint(self):
@@ -692,10 +710,10 @@ class Handle(metaclass=SingletonMeta):
                 log.info(f"当前已{action}疾跑")
                 break
 
-            await loop.run_in_executor(None, KeyboardController().press, KeyboardKey.shift)
+            await loop.run_in_executor(None, key_down_cdp_or_pynput, KeyboardKey.shift)
             if not need_run:
                 await asyncio.sleep(0.03)
-                await loop.run_in_executor(None, KeyboardController().release, KeyboardKey.shift)
+                await loop.run_in_executor(None, key_up_cdp_or_pynput, KeyboardKey.shift)
             log.info(f"{action}疾跑" + (f"，第{count+1}次尝试" if count else ""))
 
         self.running = False
@@ -741,7 +759,7 @@ class Handle(metaclass=SingletonMeta):
         """强制开启疾跑"""
         log.info("调用enable_run")
         if not self.is_running():
-            KeyboardController().press(KeyboardKey.shift)
+            key_down_cdp_or_pynput(KeyboardKey.shift)
             log.info("开启疾跑")
 
     def move_run_fix(self, start_time, time_limit=0.3):
@@ -774,9 +792,9 @@ class Handle(metaclass=SingletonMeta):
                     if result_run['max_val'] > 0.996:
                         log.info(f"疾跑匹配度: {result_run['max_val']}")
                         log.info("强制断开疾跑")
-                        KeyboardController().press(KeyboardKey.shift)
+                        key_down_cdp_or_pynput(KeyboardKey.shift)
                         time.sleep(0.05)
-                        KeyboardController().release(KeyboardKey.shift)
+                        key_up_cdp_or_pynput(KeyboardKey.shift)
                         self.run_fix_time = current_time  # 更新修复时间
                         self.run_fixed = True
             else:
@@ -901,7 +919,7 @@ class Handle(metaclass=SingletonMeta):
             if not auto_switch and elapsed_time > 5:
                 not_auto_result = self.img.scan_screenshot(not_auto)
                 if not_auto_result["max_val"] > 0.95:
-                    pyautogui.press('v')
+                    press_key_cdp_or_pyautogui('v')
                     log.info("开启自动战斗")
                     time.sleep(1)
                     auto_switch_clicked = True
@@ -921,7 +939,7 @@ class Handle(metaclass=SingletonMeta):
                     if elapsed_time > 20 and first_auto_check and auto_check_cnt == 1:
                         auto_check_cnt += 1
                         if self.img.on_interface(check_list=[screenshot_auto_check], timeout=1, threshold=0.97, offset=(40, 20, -1725, -800), allow_log=False):
-                            pyautogui.press('v')
+                            press_key_cdp_or_pyautogui('v')
                             log.info("开启自动战斗（通过行动条识别）")
                             time.sleep(1)
                             auto_switch_clicked = True
@@ -931,7 +949,7 @@ class Handle(metaclass=SingletonMeta):
                 while not_auto_result_c["max_val"] > 0.95:
                     log.info(
                         f"开启自动战斗，识别'C'，匹配值：{not_auto_result_c['max_val']}")
-                    pyautogui.press('v')
+                    press_key_cdp_or_pyautogui('v')
                     time.sleep(2)
                     not_auto_result_c = self.img.scan_screenshot(not_auto_c)
 
@@ -979,7 +997,7 @@ class Handle(metaclass=SingletonMeta):
         """
         按下b键
         """
-        pyautogui.press('b')
+        press_key_cdp_or_pyautogui('b')
         time.sleep(1)
 
     def handle_click_floor(self, floor_idx: int):

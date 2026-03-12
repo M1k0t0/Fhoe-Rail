@@ -1,7 +1,6 @@
 import time
 
 import cv2 as cv
-import pyautogui
 import win32api
 import win32con
 
@@ -9,6 +8,11 @@ from utils.blackscreen import BlackScreen
 from utils.config.config import ConfigurationManager
 from utils.handle import Handle
 from utils.img import Img
+from utils.keyboard_event import (
+    keybd_event_cdp_or_win32,
+    key_down_cdp_or_pynput,
+    key_up_cdp_or_pynput,
+)
 from utils.map_utils.map_info import MapInfo
 from utils.monthly_pass import MonthlyPass
 from utils.mouse_event import MouseEvent
@@ -18,28 +22,19 @@ from utils.log import log
 
 def _press_key(key_name: str, hold_time: float = 0.05):
     """
-    使用 win32api.keybd_event 发送按键，包含正确的扫描码和按下/释放延迟。
-    相比 pyautogui.press()，能更可靠地将按键传递到云游戏浏览器窗口。
+    发送按键，云游戏模式下通过 CDP 发送，否则通过 win32api。
     """
-    vk = _get_vk_code(key_name)
-    scan = win32api.MapVirtualKey(vk, 0)
-    win32api.keybd_event(vk, scan, 0, 0)
-    time.sleep(hold_time)
-    win32api.keybd_event(vk, scan, win32con.KEYEVENTF_KEYUP, 0)
+    keybd_event_cdp_or_win32(key_name, hold_time=hold_time)
 
 
 def _key_down(key_name: str):
     """按下按键不释放"""
-    vk = _get_vk_code(key_name)
-    scan = win32api.MapVirtualKey(vk, 0)
-    win32api.keybd_event(vk, scan, 0, 0)
+    key_down_cdp_or_pynput(key_name)
 
 
 def _key_up(key_name: str):
     """释放按键"""
-    vk = _get_vk_code(key_name)
-    scan = win32api.MapVirtualKey(vk, 0)
-    win32api.keybd_event(vk, scan, win32con.KEYEVENTF_KEYUP, 0)
+    key_up_cdp_or_pynput(key_name)
 
 
 def _get_vk_code(key_name: str) -> int:
@@ -401,7 +396,7 @@ class Map:
                 log.info("找到返回键")
                 points_back = self.img.img_center_point(
                     result_back, target_back.shape)
-                pyautogui.click(points_back, clicks=1, interval=0.1)
+                self.mouse_event.click(points_back, clicks=1, delay=0.1)
             else:
                 break
 
@@ -432,7 +427,7 @@ class Map:
             log.info(f"识别点位{points}，匹配度{result['max_val']:.3f}")
             if not self.map_statu_minimize:
                 log.info(f"地图最小化，识别图片匹配度{result['max_val']:.3f}")
-                pyautogui.click(points, clicks=10, interval=0.1)
+                self.mouse_event.click(points, clicks=10, delay=0.1)
                 self.map_statu_minimize = True
             return True
         return False

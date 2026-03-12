@@ -22,6 +22,8 @@ time_mgr = TimeUtils()
 map_info_instance = MapInfo()
 setting = Setting()
 
+_is_background = cfg.config_file.get("cloud_game_background", False)
+
 def filter_content(content, keyword):
     # 将包含指定关键词的部分替换为空字符串
     return content.replace(keyword, "")
@@ -41,11 +43,11 @@ def print_version():
 
 
 def print_info():
-    log.info("")  # 添加一行空行
-    php_content = fetch_php_file_content()  # 获取PHP文件的内容
-    filtered_content = filter_content(php_content, "舔狗日记")  # 过滤关键词
-    log.info("\n" + filtered_content)  # 将过滤后的内容输出到日志
-    log.info("")  # 添加一行空行
+    # log.info("")  # 添加一行空行
+    # php_content = fetch_php_file_content()  # 获取PHP文件的内容
+    # filtered_content = filter_content(php_content, "舔狗日记")  # 过滤关键词
+    # log.info("\n" + filtered_content)  # 将过滤后的内容输出到日志
+    # log.info("")  # 添加一行空行
     log.info("=" * 60)
     log.info("开始运行")
     print_version()
@@ -95,7 +97,7 @@ def main():
         log.info(f"config.json:{cfg.load_config()}")
         log.info("切换至游戏窗口，请确保1号位角色普攻为远程，黄泉地图1号位为黄泉")
         check_mult_screen()
-        Window().switch_window()
+        Window(is_background=_is_background).switch_window()
         map_instance = MapOperations()
         time.sleep(0.5)
         log.info("开始运行，请勿移动鼠标和键盘.向着星...呃串台了")

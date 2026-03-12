@@ -14,20 +14,29 @@ from utils.singleton import SingletonMeta
 
 class Window(metaclass=SingletonMeta):
 
-    def __init__(self, max_retries=10):
+    def __init__(self, max_retries=10, is_background=False):
         """
         初始化窗口对象，确保 hwnd 可用
         :param max_retries: 最大重试次数
+        :param is_background: 是否为后台模式（云游戏后台运行时跳过窗口查找与激活）
         """
         self.title = None
         self.hwnd = None
         self.client = None
         self.winrect = ()  # 截图窗口范围
+        self.is_background = is_background
 
-        # 初始化时先找到窗口或者启动lnk文件
-        self.switch_window()
+        if self.is_background:
+            # 云游戏后台模式：通过 CDP 操作，不需要窗口句柄
+            log.info("后台模式，跳过窗口查找与激活")
+            self.client = "云游戏"
+        else:
+            # 本地客户端模式：正常查找并激活窗口
+            self.switch_window()
+            self._init_local_mode(max_retries)
 
-        # 强制初始化 hwnd
+    def _init_local_mode(self, max_retries):
+        """本地模式初始化：查找并激活窗口"""
         for _ in range(max_retries):
             try:
                 self.title = self.get_hwnd_title()
@@ -58,7 +67,7 @@ class Window(metaclass=SingletonMeta):
 
     @staticmethod
     def get_hwnd_by_title(title):
-        """根据窗口标题获取窗口句柄"""
+        """根据窗口标题获取可见窗口句柄"""
         def callback(hwnd, hwnds):
             if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd) == title:
                 hwnds.append(hwnd)
@@ -109,6 +118,9 @@ class Window(metaclass=SingletonMeta):
         """
         检查窗口是否可见
         """
+        # 后台模式通过 CDP 操作，不需要窗口可见
+        if self.is_background:
+            return True
         if not self.hwnd:
             self.get_hwnd()
         if self.hwnd and win32gui.IsWindowVisible(self.hwnd):
@@ -183,6 +195,8 @@ class Window(metaclass=SingletonMeta):
         return rect
 
     def switch_window(self):
+        if self.is_background:
+            return
         # 测试用
         # all_titles = [win.title for win in pyautogui.getAllWindows()]
         # print("当前所有窗口标题:", [t for t in all_titles if t.strip()])

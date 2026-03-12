@@ -1,4 +1,5 @@
 import ctypes
+import io
 import time
 
 import cv2
@@ -224,8 +225,62 @@ class Img:
             log.warning(f"PrintWindow 截图失败: {e}")
             return None
 
+    def _take_screenshot_cdp(self, offset):
+        """
+        通过 CDP Page.captureScreenshot 截取浏览器视口。
+        返回的坐标以视口左上角 (0,0) 为基准，完全不依赖窗口位置。
+        """
+        from utils.cdp_client import CdpClient
+        from utils.config.config import ConfigurationManager
+        cfg = ConfigurationManager()
+        port = int(cfg.config_file.get("cdp_debug_port", 9222))
+        cdp = CdpClient(port=port)
+
+        png_data = cdp.capture_screenshot()
+        picture = Image.open(io.BytesIO(png_data))
+        vp_width, vp_height = picture.size
+        log.debug(f"CDP 截图尺寸: {vp_width}x{vp_height}")
+
+        # 如果视口不是 1920x1080，缩放到标准尺寸以匹配模板图片
+        if (vp_width, vp_height) != (1920, 1080):
+            log.info(f"CDP 视口 {vp_width}x{vp_height}，缩放到 1920x1080")
+            picture = picture.resize((1920, 1080), Image.LANCZOS)
+
+        # 应用偏移裁剪（基于 1920x1080）
+        crop_left = max(0, offset[0])
+        crop_top = max(0, offset[1])
+        crop_right = min(1920, 1920 + offset[2])
+        crop_bottom = min(1080, 1080 + offset[3])
+
+        if crop_left >= crop_right or crop_top >= crop_bottom:
+            log.info(f'截图偏移无效({offset[0]},{offset[1]},{offset[2]},{offset[3]})，使用完整视口')
+            crop_left, crop_top, crop_right, crop_bottom = 0, 0, 1920, 1080
+
+        if (crop_left, crop_top, crop_right, crop_bottom) != (0, 0, 1920, 1080):
+            picture = picture.crop((crop_left, crop_top, crop_right, crop_bottom))
+
+        picture.save("test.png")
+        screenshot = np.array(picture)
+        screenshot = cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR)
+
+        # 坐标以视口 (0,0) 为基准 — 模板匹配结果可直接用于 CDP 输入
+        self.temp_screenshot = (screenshot, crop_left, crop_top, crop_right, crop_bottom)
+        return screenshot, crop_left, crop_top, crop_right, crop_bottom
+
     def _take_screenshot_impl(self, offset, max_retries, retry_interval):
         """take_screenshot 的实际实现（在正确的 DPI 上下文中调用）"""
+        # CDP 模式：使用 CDP 截图，完全不需要窗口可见
+        if self.window.client == "云游戏":
+            retries = 0
+            while retries <= max_retries:
+                try:
+                    return self._take_screenshot_cdp(offset)
+                except Exception as e:
+                    log.info(f"CDP 截图失败: {e}，等待 {retry_interval} 秒后重试")
+                    retries += 1
+                    time.sleep(retry_interval)
+            raise RuntimeError(f"CDP 截图失败，已达到最大重试次数 {max_retries} 次")
+
         if not self.window.check_window_visibility():
             raise RuntimeError("窗口不可见")
 
