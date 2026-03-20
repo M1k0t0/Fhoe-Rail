@@ -13,6 +13,7 @@ from utils.handle import Handle
 from utils.img import Img
 from utils.log import log
 from utils.log import webhook_and_log
+from utils.keyboard_event import press_key_cdp_or_pyautogui
 from utils.map_utils.map import Map
 from utils.map_utils.map_info import MapInfo
 from utils.map_utils.map_statu import MapStatu
@@ -88,6 +89,60 @@ class MapOperations:
         else:
             log.info(f'地图编号 {start} 不存在，请尝试检查地图文件')
 
+    def re_enter_game(self) -> bool:
+        clicked = False
+        for candidate_path in self.img.get_reconnect_click_candidates():
+            try:
+                if self.mouse_event.click_target(
+                    candidate_path, 0.88, flag=False, timeout=1.2, retry_in_map=False
+                ):
+                    clicked = True
+                    time.sleep(0.8)
+            except Exception as e:
+                log.debug(f"点击本地重连资源异常({candidate_path}): {e}")
+        return clicked
+
+    def handle_disconnect_and_resume(self, max_wait: int = 120) -> bool:
+        """
+        掉线检测与恢复：
+        - 检测到掉线界面后尝试点击确认/按回车重连
+        - 等待回到主界面后继续当前地图流程
+        """
+        if not self.img.has_disconnect_ui(threshold=0.97):
+            return False
+
+        log.info("检测到疑似掉线，开始尝试重连")
+        reconnect_start = time.time()
+        while time.time() - reconnect_start < max_wait:
+            try:
+                self.mouse_event.click_target(
+                    "picture\\confirm.png", 0.93, flag=False, timeout=1.2, retry_in_map=False
+                )
+            except Exception as e:
+                log.debug(f"点击重连确认按钮异常: {e}")
+
+            time.sleep(15)
+            clicked_any = self.re_enter_game()
+
+            # 没识别到按钮时，再做兜底输入
+            if not clicked_any:
+                try:
+                    self.mouse_event.click_center()
+                except Exception as e:
+                    log.debug(f"点击窗口中心异常: {e}")
+                press_key_cdp_or_pyautogui('enter')
+                time.sleep(0.4)
+                press_key_cdp_or_pyautogui('space')
+
+            time.sleep(10)
+
+            if self.img.on_main_interface(timeout=2.0, allow_log=False):
+                log.info("重连成功，继续当前地图流程")
+                return True
+
+        log.info("重连等待超时，保持当前流程继续执行")
+        return False
+
     def process_single_map(self, index, map_json, dev: bool = False):
         """
         处理单张地图
@@ -153,6 +208,7 @@ class MapOperations:
             self.map_statu.temp_point = ""  # 用于输出传送前的点位
             self.map_statu.normal_run = False  # 初始化跑步模式为默认
             for start in map_data['start']:
+                self.handle_disconnect_and_resume()
                 key = list(start.keys())[0]
                 log.info(key)
                 value = start[key]
@@ -335,6 +391,7 @@ class MapOperations:
             last_key = ""
             self.handle.last_step_run = False  # 初始化上一次为走路
             for map_index, map_value in enumerate(map_data["map"]):
+                self.handle_disconnect_and_resume()
                 press_key = self.pause.check_pause(
                     dev=dev, last_point=last_point)
                 if press_key:

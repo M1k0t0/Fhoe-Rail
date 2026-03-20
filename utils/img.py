@@ -41,6 +41,15 @@ class Img:
                 "finish5_ui": "./picture/finish_fighting5.png",
                 "battle_esc_check": "./picture/battle_esc_check.png",
                 "switch_run": "./picture/switch_run.png",
+                "relogin_ui": "./picture/relogin.png",
+                "retry_ui": "./picture/retry.png",
+                "click_enter_ui": "./picture/click_enter.png",
+                "start_game_ui": "./picture/start_game.png",
+                "enter_game_ui": "./picture/enter_game.png",
+                "agree_update_ui": "./picture/agree_update.png",
+                "bilibili_agree_update_ui": "./picture/bilibili_agree_update.png",
+                "restart_ui": "./picture/restart.png",
+                "confirm_ui": "./picture/confirm.png",
             }
         else:
             self.image_paths = image_paths
@@ -534,6 +543,39 @@ class Img:
                     log.info(
                         f"在 {timeout} 秒 的时间内未检测到{interface_desc}，相似图片最高匹配值{max(temp_max_val):.3f}")
                 return False
+
+    def has_disconnect_ui(self, threshold=0.9) -> bool:
+        """
+        检测是否出现掉线/登录异常界面
+        """
+        check_list = []
+        for attr in ["relogin_ui", "retry_ui", "start_game_ui", "enter_game_ui"]:
+            img = getattr(self, attr, None)
+            if img is not None:
+                check_list.append(img)
+        if not check_list:
+            return False
+        return self.on_interface(
+            check_list=check_list,
+            timeout=0.0,
+            interface_desc='掉线或登录异常界面',
+            threshold=threshold,
+            allow_log=False,
+        )
+
+    def get_reconnect_click_candidates(self):
+        """
+        返回重连/重新进入游戏阶段可点击图片路径列表
+        """
+        return [
+            "picture\\confirm.png",
+            "picture\\restart.png",
+            "picture\\click_enter.png",
+            "picture\\start_game.png",
+            "picture\\enter_game.png",
+            "picture\\agree_update.png",
+            "picture\\bilibili_agree_update.png",
+        ]
 
     def image_rotate(self, src, rotate=0):
         """
